@@ -1,0 +1,281 @@
+Pulling spot data...
+Pulling vol surface...
+Pulling SOFR...
+Pulling USD OIS curve...
+Pulling forward implied yields...
+
+==============================================================================
+TIER 0  --  DID THE MACHINE DO WHAT I ASKED?   (read before any P&L)
+==============================================================================
+[top_up] 57 roll attempts: traded=57
+  total entry cost 0   gross traded 10,864,234,732   positions closed 0
+[min_life=7d] 49 exit dates, 212 legs closed early, 10,067,936,269 gross unwound
+
+--- roll log ----------------------------------------------------------------
+      date action  legs         gross  cost  leverage  cond  want_volga@1M  book_volga@1M  want_vega@1M  book_vega@1M  want_vanna@1M  book_vanna@1M note
+2025-11-26 traded     4 375,141,828.1   0.0       1.7   1.3      -30,000.0      -30,000.0           0.0           0.0            0.0            0.0     
+2025-12-03 traded     4 237,697,975.6   0.0       1.4   1.3      -30,000.0      -30,000.0           0.0          -0.0            0.0           -0.0     
+2025-12-10 traded     4 441,871,023.1   0.0       1.8   1.3      -30,000.0      -30,000.0           0.0          -0.0            0.0           -0.0     
+2025-12-17 traded     4 145,454,470.0   0.0       1.6   1.3      -30,000.0      -30,000.0           0.0           0.0            0.0            0.0     
+2025-12-23 traded     4 413,076,385.3   0.0       1.4   1.3      -30,000.0      -30,000.0           0.0          -0.0            0.0           -0.0     
+2025-12-26 traded     4  53,149,094.9   0.0       1.7   1.3      -30,000.0      -30,000.0           0.0          -0.0            0.0            0.0     
+2026-01-02 traded     4 415,022,516.1   0.0       1.6   1.3      -30,000.0      -30,000.0           0.0           0.0            0.0           -0.0     
+  ... 43 rows elided (max_rows=14) ...
+2026-07-16 traded 4 156,634,509.9 0.0 1.5 1.3 -30,000.0 -30,000.0 0.0 -0.0 0.0  0.0 
+2026-07-21 traded 4 122,337,975.0 0.0 1.5 1.3 -30,000.0 -30,000.0 0.0 -0.0 0.0  0.0 
+2026-07-24 traded 4  55,669,901.0 0.0 1.3 1.3 -30,000.0 -30,000.0 0.0  0.0 0.0  0.0 
+2026-07-31 traded 4 174,621,801.1 0.0 1.1 1.3 -30,000.0 -30,000.0 0.0 -0.0 0.0  0.0 
+2026-08-07 traded 4 260,135,195.7 0.0 1.9 1.3 -30,000.0 -30,000.0 0.0  0.0 0.0  0.0 
+2026-08-14 traded 4 177,933,544.7 0.0 1.3 1.3 -30,000.0 -30,000.0 0.0 -0.0 0.0 -0.0 
+2026-08-19 traded 4 183,607,922.3 0.0 1.3 1.3 -30,000.0 -30,000.0 0.0  0.0 0.0  0.0 
+  actions {'traded': 57}   legs/roll mean 4.0   gross total 10,864,234,732
+  leverage: mean 1.5  max 1.9  (0% of rolls above 70% of the 10 limit)
+
+--- does wake= actually fire? -----------------------------------------------
+  exit dates 49   roll dates 57   same-day both 49  (100% of exits)
+  wake=[roller] nulls the cadence counter so top_up refills the hole the SAME
+  day. If that overlap is ~0 the wake is not firing and the book runs light
+  between rolls -- which is a legitimate choice, but make it deliberately.
+
+--- what got traded ---------------------------------------------------------
+  legs opened 228   sleeves ['wing_convex']   tenors ['1M']
+  deltas traded [-0.1, 0.1]
+  exit reasons {'min_life': 212}
+  min t_days any leg reached 7   (0 = died at expiry; ~7 = an exit rule caught it)
+
+==============================================================================
+TIER 1  --  IS THE RISK ON TARGET, IN THE UNITS I SET IT IN?
+==============================================================================
+  live days 195 of 196   horizon=7d   tenor=1M   target volga=-30,000
+
+--- tracking, normalised (the units the target was written in) --------------
+  greek             mean   mean|err|  % of budget    p90|err|   peak|err|
+  volga          -25,403       4,943        16.5%      14,006      28,212
+  vega              -287      11,110        37.0%      30,193     165,428
+  vanna            3,851      18,459        61.5%      52,184      97,247
+  A pinned greek is targeted at ZERO, so its whole level is drift. Errors are
+  divided by |budget| -- a fixed, non-zero denominator. Never divide by the net
+  greek itself: it wanders through zero and the ratio explodes.
+
+--- the sawtooth (top_up pins on roll days only) ----------------------------
+                    day AFTER a roll    all other days   (n 57 / 138)
+  |vega|                           0            15,699
+  |vanna|                          0            26,083
+  |volga err|                      0             6,984
+  The left column should be ~0 for a PINNED greek: that is top_up doing its
+  job. The gap between the columns IS the strategy's real risk profile, and a
+  mean over both hides it. If the left column is NOT smaller, either the solve is
+  not hitting its pins or you are reading the pre-roll book.
+
+--- position count ----------------------------------------------------------
+  n_open  med 20  max 24
+  predicted steady state ~ (23 calendar days of life / 4.8 observed cadence) x 4.0 legs/roll = 19
+  observed cadence 4.8 cal days vs configured 7.0 (57 trades)   <- wake= is tightening it, which is the point
+  A mismatch AFTER accounting for the observed cadence means vintages are not
+  expiring, or the roller is not firing.
+
+--- path, every 15th live day -----------------------------------------------
+      date  n_open  norm_volga  norm_vega  norm_vanna
+2025-11-27       4     -30,000          0           0
+2025-12-18      16     -30,000          0           0
+2026-01-08      16      -3,706    -39,283     -54,653
+2026-01-29      20     -30,000          0           0
+2026-02-19      20     -12,413    -12,412     -43,760
+2026-03-12      20     -27,455     21,670      -3,903
+2026-04-02      20     -18,419     17,069      -7,479
+2026-04-23      20     -22,572     21,869      15,006
+2026-05-14      20     -27,224      6,332     -10,335
+2026-06-04      24     -30,000         -0          -0
+2026-06-25      24     -28,859     -4,604      -8,447
+2026-07-16      24     -30,000         -0           0
+2026-08-06      24     -27,951     12,233      18,309
+
+==============================================================================
+TIER 2  --  DO THE BOOKS BALANCE?
+==============================================================================
+  [OK ] 1 pnl == option + hedge + carry - hedge_tc - option_tc    0.00e+00
+  [OK ] 2 equity is the cumsum of pnl                           0.00e+00
+  [OK ] 3 daily option_tc == the cost ledger                    0.00e+00  TRIVIAL: costs are off
+  [OK ] 4 every position's Taylor expansion closes              4.55e-13
+  [OK ] 5 positions roll up to the daily frame                  2.33e-10
+  [OK ] 6 delta P&L is cancelled by the hedge                   2.11e-10  only exact at hedge_fraction=1.0
+  [OK ] 7 the sizer's cost estimate == what the Book charged    0.00e+00  TRIVIAL: costs are off
+  NOTE cost_model is disabled (option_tc == 0 everywhere), so #3 and #7 are
+       0 == 0 and prove nothing.
+
+==============================================================================
+TIER 3  --  WHERE DID THE P&L COME FROM?
+==============================================================================
+
+--- P&L VIEW -- additive, sums exactly to pnl -------------------------------
+  gamma_pnl                225,394
+  theta_pnl                598,217
+  vega_pnl                   4,500
+  vanna_pnl                455,474
+  volga_pnl               -147,432
+  recon_resid             -252,525
+  delta_pnl                793,444
+  hedge_pnl               -793,444
+  hedge_carry              -83,956
+  - option_tc                   -0
+  - hedge_tc              -194,766
+  ================================
+  sum                      604,907   vs equity          604,907   diff -5.82e-10
+  At hedge_fraction=1.0 delta_pnl and hedge_pnl cancel, so what actually drives
+  a delta-hedged book is the five remaining greek buckets and the cost lines.
+
+--- EDGE VIEW -- realised vs implied. NOT a decomposition of pnl ------------
+  gamma_pnl_be             823,612   ATM variance risk premium
+  vanna_pnl_be             514,635   SKEW premium
+  volga_pnl_be           1,646,824   CONVEXITY / vol-of-vol premium
+  vega_pnl                   4,500   (no _be counterpart: E[dsigma] ~ 0)
+
+  sum(_be)        2,985,071   sum(gamma+theta+vanna+volga)      1,131,654
+  gap             1,853,417   = MINUS the premium the smile implied,
+                              i.e. what you were paid to carry the position.
+  gamma_pnl_be is gamma+theta REGROUPED, so adding theta again double-counts.
+  vanna/volga_be are SURPRISES, not flows. Never stack these as an attribution
+  of equity -- read the DRIFT of the cumulative, which is the objective.
+
+==============================================================================
+TIER 4  --  IS THE SHAPE RIGHT?
+==============================================================================
+
+--- mean greek signature by tag ---------------------------------------------
+       vega_1vp  volga_1vp  vanna_1pct_1vp  theta_1d
+tag                                                 
+atm_c   13208.0      470.6          -760.8   -1028.9
+atm_p   13208.0      470.6          -760.8   -1849.6
+c10    -12346.6    -2041.7        -10980.6    1350.7
+p10    -14050.4    -2380.2         13417.6    1952.0
+
+--- notional traded by type / delta / direction -----------------------------
+option_type  target_delta  direction
+call          0.1          -1           3.254800e+09
+                            1           8.004289e+08
+              NaN          -1           1.974640e+08
+                            1           1.268684e+09
+put          -0.1          -1           3.303464e+09
+                            1           5.732464e+08
+              NaN          -1           1.974640e+08
+                            1           1.268684e+09
+
+  signed call -1,383,150,863   signed put -1,658,997,534   imbalance 9.1%   (0% = symmetric, 100% = one-sided)
+  A volga (wing-convexity) short should be roughly SYMMETRIC. A vanna (skew)
+  short should be LOPSIDED. If the shape does not match the target you set,
+  the pins are not binding the way you think.
+
+--- sign checks on a short-convexity book -----------------------------------
+  theta_pnl        598,217   (positive => net short options, collecting decay)
+  volga_1vp < 0 on 100% of days   vega_1vp < 0 on 38% of days
+
+==============================================================================
+TIER 5  --  THE DISTRIBUTION, NOT THE MEAN
+==============================================================================
+
+--- daily P&L ---------------------------------------------------------------
+  mean        3,086   sd       24,546   skew   -0.07   min     -178,597   max      141,621
+  max drawdown     -182,744   on 2026-01-27   final equity      604,907
+  You are SHORT convexity, so the mean is not the risk -- the left tail is.
+    -> skew -0.07: roughly symmetric. Over 195 days that usually means the
+       tail event simply has not happened in this window, not that it cannot.
+
+--- worst 5 days, split by bucket -------------------------------------------
+                pnl  gamma_pnl  theta_pnl  vega_pnl  vanna_pnl  volga_pnl  recon_resid
+date                                                                                  
+2026-01-27 -178,597    -38,527      6,193   -18,315    -74,554     -3,700      -45,573
+2026-01-30  -45,243    -53,855     12,170    -9,484     14,111       -690       -3,734
+2026-02-13  -40,876        398    -14,205   -19,402        -69        264       -3,537
+2026-06-17  -35,499    -24,301      3,082    -5,801     13,371     -2,989      -17,330
+2026-05-08  -33,525      1,959    -11,878   -19,064       -656        -17       -1,337
+
+--- recon_resid -- gap risk, NOT an error to drive to zero ------------------
+  sum     -252,525   mean |r|        772   p99 |r|      7,275   peak |r|     42,796
+  as % of |option_pnl|: 3.58%
+      date  pos_id   tag  dt_days    dS  dsigma    option_pnl   gamma_pnl  recon_resid
+2026-01-27      29   p10     1.00 -0.01    0.01 -1,005,994.19 -275,388.11    42,796.13
+2026-01-27      25   p10     1.00 -0.01    0.01   -225,840.24  -74,127.44   -33,099.49
+2025-12-05       1   p10     1.00 -0.01    0.00   -360,380.34 -133,359.15   -24,760.42
+2026-01-09      18   c10     1.00  0.00   -0.00   -284,262.91  -64,234.84   -23,751.20
+2025-12-05       4 atm_p     1.00 -0.01    0.01    488,271.01   94,992.49   -23,256.28
+  A large |recon_resid| is a discrete jump or a Taylor breakdown. For a short
+  wings book those ARE the days that hurt -- track the distribution as a risk
+  metric, not as a check that passed.
+
+==============================================================================
+TIER 6  --  WHAT TO SWEEP BEFORE BELIEVING ANY OF IT
+==============================================================================
+  1. COST SCALE, first and above everything else. This run had cost_model
+     disabled, so you do not yet know whether the result survives spread --
+     and spread is the binding constraint on a wing strategy. Re-run at
+     OptionCostModel(scale=1.0) and 2.0 before reading anything above as a
+     result rather than as mechanics.
+  2. min_life_days over (None, 3, 5, 7, 10, 14). A result that only works at
+     exactly 7 is a result about 7. Rebuild BOTH roller and exiter each pass:
+     both carry _last and log across runs.
+  3. roll_days around 5 -- cadence trades tracking error against
+     spread, and rd=1 is a free daily vega controller with no hedge sleeve.
+  4. allow_deltas. A menu with as many columns as constraints makes the solve
+     square: unique answer, no cost minimisation. Widen it and the LP starts
+     choosing again.
+  5. WINDOW. Re-run on sub-windows and compare pnl_per_unit_greek, never raw
+     P&L -- different configs carry different risk and raw P&L has no common
+     denominator.
+[chart] wrote out/real_risk.png
+[chart] wrote out/real_attrib.png
+HARVEST   premium per unit of the risk that earned it
+  volga_be/|volga|           97.3211
+  gamma_be/|gamma|            9.9652
+  vanna_be/|vanna|           22.3174
+  vega leak / volga_be          0.3%
+  return_on_premium           0.0784
+
+TRACKING   did I hold what I said?
+  target volga               -30,000
+  mean |err|                      5k      16.5%
+  p90 / peak |err|               14k        28k
+  days within 20%              70.8%
+  post-roll / other:
+    |vega|                       0        16k
+    |vanna|                      0        26k
+
+EXECUTION
+  rolls traded=57
+  cadence obs / cfg              4.8      7.0
+  leverage mean / max            1.5      1.9
+  cond max                       1.4
+  legs per roll                  4.0
+  gross per roll              190.6M
+  avg days held                 23.8
+  pct held to expiry            0.0%
+  n_open med / max                20         24
+
+COST
+  option_tc / hedge_tc             0       195k
+  tc/unit |volga| (opt+spot)      11.5099
+  !! cost_model DISABLED
+     this run is GROSS of spread
+
+TAIL
+  sd / skew (daily)              25k      -0.07
+  VaR95 / CVaR5                 -21k       -47k
+  max_dd / dd days             -183k        144
+  recon mean|r| / peak           772        43k
+  recon % of |opt_pnl|         3.58%
+
+RISK-ADJUSTED   one path -- read last
+  sharpe_ann (P&L)            1.9960
+  sortino_ann (P&L)           2.2211
+  calmar (P&L)                3.3101
+  final equity                  605k
+
+WORST 3 DAYS    be = attribution, exp = normalised exposure
+
+  date            pnl    g_be   va_be   vo_be   resid   vo_exp   vg_exp
+  2026-01-27    -179k    -32k    -71k      4k    -46k     -20k     -60k
+  2026-01-30     -45k    -42k     14k      8k     -4k     -32k     -21k
+  2026-02-13     -41k    -14k     208      6k     -4k     -30k       -0
+[dashboard] wrote out/real_dash_normalised.png
+[dashboard] wrote out/real_dash_trader.png
+
+REAL DRIVER OK

@@ -1,0 +1,223 @@
+Pulling spot data...
+Pulling vol surface...
+Pulling SOFR...
+Pulling USD OIS curve...
+Pulling forward implied yields...
+[data] 286 business dates, 2025-07-28 -> 2026-08-31
+
+==========================================================================
+A.  ONE STATIC VINTAGE, NO HEDGE  (the drift you are fixing)
+==========================================================================
+[top_up] 1 roll attempts: traded=1
+  total entry cost 6,587   gross traded 39,337,911   positions closed 0
+
+  --- POST-TRADE vega, normalised (what the hedge LEFT) ---
+  live days  23   mean   4,222   median   3,343   p90   7,964   peak    8,997
+  mean/|budget|  1.407   out-of-band  87.0%   signed mean   -4,083   <- near zero => variance, not return
+  volga tracking error    2,299 (76.6% of budget)
+
+  legs opened    4   n_open med/max 4/4   exit reasons {'expiry': 4}
+  spread paid by sleeve/reason:
+sleeve       reason
+wing_convex  open      6587.0
+  option_tc      6,587   hedge_tc      2,258   equity      -12,285
+  |delta_pnl + hedge_pnl| max  1.46e-11   (must be ~0 at hedge_fraction=1.0)
+
+  vega path, normalised (every other day):
+      date  n_open  norm_vega  norm_volga
+2026-07-28       4         -0      -3,000
+2026-07-30       4     -1,135      -2,208
+2026-08-03       4     -2,056      -1,347
+2026-08-05       4      1,546      -2,160
+2026-08-07       4     -1,612      -1,220
+2026-08-11       4     -6,978         396
+2026-08-13       4     -6,777         386
+2026-08-17       4     -8,997         505
+2026-08-19       4     -7,727         408
+2026-08-21       4     -4,208        -796
+2026-08-25       4     -4,767         -49
+2026-08-27       0     -3,239           2
+2026-08-31       0          0           0
+
+==========================================================================
+B.  ONE STATIC VINTAGE + VegaHedge  (band=0.20x budget, restrike=0.01)
+==========================================================================
+[top_up] 1 roll attempts: traded=1
+  total entry cost 6,587   gross traded 39,337,911   positions closed 0
+[vega_hedge band=600 normalised, restrike=0.01] 25 checks: hedged=18, in_band=6, restruck_flat=1
+  hedge cost 4,615   gross traded 26,989,280   legs re-struck 22
+  |resid| normalised: mean 1,448  p90 3,003  peak 5,570  out-of-band 72.0% of checks
+  signed mean -329   <- near zero means this bought variance, not return
+
+  --- POST-TRADE vega, normalised (what the hedge LEFT) ---
+  live days  25   mean      64   median       0   p90     259   peak      532
+  mean/|budget|  0.021   out-of-band   0.0%   signed mean       32   <- near zero => variance, not return
+  volga tracking error    2,421 (80.7% of budget)
+
+  legs opened   40   n_open med/max 16/24   exit reasons {'expiry': 4, 'restrike': 22}
+  spread paid by sleeve/reason:
+sleeve       reason
+hedge        close     4541.0
+             open      4615.0
+wing_convex  open      6587.0
+  option_tc     15,744   hedge_tc      2,045   equity      -17,233
+  |delta_pnl + hedge_pnl| max  7.28e-12   (must be ~0 at hedge_fraction=1.0)
+
+  hedge decision log:
+      date        action  resid_vega  resid_raw  restruck     gross  cost
+2026-07-27       in_band          -0         -0         0         0     0
+2026-07-28       in_band        -274       -244         0         0     0
+2026-07-29        hedged      -1,135     -1,039         0   911,304   156
+2026-07-30        hedged      -2,247     -2,049         0 1,828,403   313
+2026-07-31        hedged         972        964         0   794,282   136
+2026-08-03        hedged       2,149      1,932         0 1,667,414   285
+2026-08-04        hedged       1,436      1,308         0 1,128,993   193
+2026-08-05        hedged      -3,244     -2,899         0 2,543,297   435
+2026-08-06       in_band         238        207         0         0     0
+2026-08-07        hedged      -5,570     -5,269         0 4,406,838   754
+2026-08-10       in_band         103         95         0         0     0
+2026-08-11        hedged      -1,132     -1,030         0   889,024   152
+2026-08-12        hedged       1,248      1,125         0   987,087   169
+2026-08-13        hedged        -995       -905         0   807,388   138
+2026-08-14        hedged      -1,429     -1,386         8 1,158,947   198
+2026-08-17       in_band         532        490         0         0     0
+2026-08-18        hedged       1,415      1,311         0 1,131,841   194
+2026-08-19        hedged      -1,925     -1,700         4 1,491,290   255
+2026-08-20        hedged      -1,491     -1,276         6 1,138,831   195
+2026-08-21        hedged       1,080        988         2   826,762   141
+2026-08-24        hedged      -2,643     -2,236         0 1,929,581   330
+2026-08-25        hedged       1,250      1,084         0   935,682   160
+2026-08-26       in_band        -123       -104         0         0     0
+2026-08-27        hedged       3,243      2,704         0 2,412,316   413
+2026-08-28 restruck_flat         323        289         2         0     0
+
+  hedge volga as % of wing volga: mean 125.6%  peak 2275.7%   <- this is what restrike_move controls
+
+                            unhedged      hedged
+  mean                         4,222          64
+  p90                          7,964         259
+  peak                         8,997         532
+  pct>band                     87.0%        0.0%
+  option_tc                    6,587      15,744
+  equity                     -12,285     -17,233
+  Equity SHOULD be worse hedged -- 10.5 measured the residual as zero-mean,
+  so this buys attribution purity and variance, not return. If it improves,
+  be suspicious before being pleased.
+
+==========================================================================
+C.  BAND SWEEP on one static vintage
+==========================================================================
+  band    band$  checks  hedged  restruck   mean|v|      p90      peak     opt_tc    hedge$   sd(pnl)     equity  ppg(wng)
+   off        0       0       0         0     4,222    7,964     8,997      6,587         0     4,111    -12,285    4.3524
+  0.05      150      25      20        22        29      107       274     15,792     9,204     3,074    -17,289    4.3524
+  0.10      300      25      20        22        29      107       274     15,792     9,204     3,074    -17,289    4.3524
+  0.20      600      25      18        22        64      259       532     15,744     9,156     3,075    -17,233    4.3524
+  0.50    1,500      25       9        10       468    1,266     1,393     13,366     6,778     2,928    -14,021    4.3524
+  1.00    3,000      25       5         6       780    1,767     2,279     12,210     5,623     2,988    -13,933    4.3524
+
+  A tighter band buys a lower mean residual for more spread. The question is
+  whether the variance reduction is worth the bill -- and the bill is bounded
+  below by STAGE D control B, not by zero.
+  ppg(wng) is printed ONLY to show it is CONSTANT: the roller cannot see the
+  hedge sleeve, so the wing sleeve is the same book at every band. Read sd(pnl)
+  and equity instead -- see ppg_sleeve.__doc__.
+  If the tightest bands give IDENTICAL rows then `band` is not the binding
+  constraint there -- restrike_move (which is the only thing that CLOSES a hedge
+  leg) or min_trade is. Compare `restruck` against `checks`.
+
+==========================================================================
+D-A.  ROLLING rd=5, UNHEDGED  (the sawtooth drift)
+==========================================================================
+[top_up] 39 roll attempts: traded=39
+  total entry cost 135,284   gross traded 792,437,915   positions closed 0
+
+  --- POST-TRADE vega, normalised (what the hedge LEFT) ---
+  live days 195   mean   1,596   median     950   p90   3,745   peak   13,916
+  mean/|budget|  0.532   out-of-band  61.5%   signed mean      367   <- near zero => variance, not return
+  volga tracking error      715 (23.8% of budget)
+
+  legs opened  150   n_open med/max 16/20   exit reasons {'expiry': 135}
+  spread paid by sleeve/reason:
+sleeve       reason
+wing_convex  open      135284.0
+  option_tc    135,284   hedge_tc     25,020   equity     -177,420
+  |delta_pnl + hedge_pnl| max  7.28e-11   (must be ~0 at hedge_fraction=1.0)
+
+==========================================================================
+D-B.  ROLLING rd=1, UNHEDGED  (zero-code benchmark to BEAT)
+==========================================================================
+[top_up] 195 roll attempts: deadband=3, traded=192
+  total entry cost 279,180   gross traded 1,633,403,995   positions closed 0
+
+  --- POST-TRADE vega, normalised (what the hedge LEFT) ---
+  live days 195   mean       7   median       0   p90       0   peak      657
+  mean/|budget|  0.002   out-of-band   0.5%   signed mean        7   <- near zero => variance, not return
+  volga tracking error        1 (0.0% of budget)
+
+  legs opened  684   n_open med/max 77/89   exit reasons {'expiry': 610}
+  spread paid by sleeve/reason:
+sleeve       reason
+wing_convex  open      279180.0
+  option_tc    279,180   hedge_tc     36,777   equity     -265,279
+  |delta_pnl + hedge_pnl| max  6.55e-11   (must be ~0 at hedge_fraction=1.0)
+
+==========================================================================
+D-C.  ROLLING rd=5 + VegaHedge  (band=0.20)
+==========================================================================
+[top_up] 39 roll attempts: traded=39
+  total entry cost 135,284   gross traded 792,437,915   positions closed 0
+[vega_hedge band=600 normalised, restrike=0.01] 195 checks: hedged=130, in_band=56, restruck_flat=9
+  hedge cost 36,415   gross traded 207,547,568   legs re-struck 212
+  |resid| normalised: mean 1,681  p90 3,372  peak 13,674  out-of-band 66.7% of checks
+  signed mean 58   <- near zero means this bought variance, not return
+
+  --- POST-TRADE vega, normalised (what the hedge LEFT) ---
+  live days 195   mean      99   median       0   p90     436   peak      589
+  mean/|budget|  0.033   out-of-band   0.0%   signed mean       26   <- near zero => variance, not return
+  volga tracking error      731 (24.4% of budget)
+
+  legs opened  410   n_open med/max 32/46   exit reasons {'expiry': 175, 'restrike': 212}
+  spread paid by sleeve/reason:
+sleeve       reason
+hedge        close      47166.0
+             open       36415.0
+wing_convex  open      135284.0
+  option_tc    218,864   hedge_tc     26,114   equity     -261,276
+  |delta_pnl + hedge_pnl| max  7.28e-11   (must be ~0 at hedge_fraction=1.0)
+
+  hedge volga as % of wing volga: mean 4.1%  peak 53.7%
+  hedge spread by reason: {'close': 47166.0, 'open': 36415.0}
+  of which on ROLL dates: 18,735 (22.4%)  <- the roller/hedge sleeve-scoping churn
+
+  wing-sleeve volga_pnl_be  unhedged     147,135.28   hedged     147,135.28
+  |difference| 0.00e+00  <- MUST be ~0: the roller cannot see the hedge sleeve,
+  which is also why ppg(wing) below is the same number for A and D and cannot
+  be used to judge the hedge.
+
+==========================================================================
+THE COMPARISON THAT DECIDES IT
+==========================================================================
+config                    mean|v|  /budg     p90  %>band    opt_tc   hedge$  vega_pnl  sd(pnl)     equity  ppg(wng)
+A  rd=5 unhedged            1,596  0.532   3,745   61.5%   135,284        0   -56,658    4,843   -177,420   95.4004
+B  rd=1 unhedged                7  0.002       0    0.5%   279,180        0   -59,216    4,694   -265,279   96.7805
+D  rd=5 + vega hedge           99  0.033     436    0.0%   218,864   83,580   -47,437    4,490   -261,276   95.4004
+  sd(pnl) is the variance-reduction claim -- the only column that can vindicate
+  the hedge sleeve on its own terms. ppg(wng) is invariant between A and D by
+  construction; it differs for B only because rd=1 changes the ROLLER.
+
+  hedge spread bill            83,580
+  control B increment         143,896   (rd=1 option_tc - rd=5 option_tc)
+  verdict: the hedge BEATS the zero-code rd=1 route on cost.
+  If it loses, set roll_days=1 and delete the sleeve -- that is the hedge's
+  only claim, and it is the comparison to make before reading any P&L.
+
+  --- P&L by bucket (whole book) ---
+  bucket             rd=5 unhedged    rd=5 + hedge
+  theta_pnl                138,533         142,507
+  vega_pnl                 -56,658         -47,437
+  volga_pnl_be             147,135         146,883
+  vanna_pnl_be              51,284          48,943
+  gamma_pnl_be              32,402          27,118
+  recon_resid              -12,600         -13,230
+  THE GATE: vega_pnl should collapse toward noise and volga_pnl_be should be
+  the dominant bucket. If it is not, the sleeve is not isolating what you think.
