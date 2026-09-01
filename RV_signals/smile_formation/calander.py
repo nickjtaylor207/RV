@@ -10,6 +10,8 @@ FX option date arithmetic — faithful to Clark, "Foreign Exchange Option Pricin
 
 Two layers:
 
+Changing stuff
+
 1. Low-level business-day primitives (is_business_day, preceding/next_business_day,
    modified_following) that take a single QuantLib calendar. Used to pick the
    trade/horizon date.
