@@ -1,0 +1,5 @@
+{
+  "python.analysis.extraPaths": [
+    "RV_signals/smile_formation"
+  ]
+}

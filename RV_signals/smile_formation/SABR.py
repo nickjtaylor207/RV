@@ -387,7 +387,8 @@ def sabr_percentiles(pair: str, tenors,
         if history_days is not None:
             need = history_days
         dataset = FXVolDataset.build(pairs=[pair], days=need)
-    hist = calibrate_sabr_history(pair, tenors, dataset, delta_pts, beta, verbose)
+    hist = calibrate_sabr_history(pair, tenors, dataset, delta_pts, beta,
+                                   verbose=verbose)
     if hist.empty:
         return pd.DataFrame()
     last_date  = hist.index.max()
@@ -535,7 +536,8 @@ def compare_implied_realized(pair: str, tenors,
             need = history_days
         dataset = FXVolDataset.build(pairs=[pair], days=need)
 
-    imp = calibrate_sabr_history(pair, tenors, dataset, delta_pts, beta, verbose)
+    imp = calibrate_sabr_history(pair, tenors, dataset, delta_pts, beta,
+                                   verbose=verbose)
     rea = realized_rho_nu_history(pair, tenors, dataset, verbose)
     if imp.empty or rea.empty:
         return {'rho': pd.DataFrame(), 'nu': pd.DataFrame(), 'series': {}}
@@ -600,21 +602,200 @@ def compare_implied_realized(pair: str, tenors,
 
 
 
-pair = 'AUDCAD'
-tenors = ['1W', '2W', '1M', '2M']
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Smile-vs-realized panel
+# ══════════════════════════════════════════════════════════════════════════════
+#
+# Implied side : the per-tenor SABR calibration, untouched. One (rho, nu) per
+#                tenor, straight off the smile fit.
+# Realized side: TWO lookback windows per tenor, specified explicitly below
+#                rather than derived from the tenor. Short and long, so you can
+#                see whether the two disagree — when the 5d and 10d realized
+#                numbers point opposite ways at 1W, the short one is sampling
+#                error and the panel shows you that instead of hiding it.
+#
+# Levels are NOT comparable between implied and realized. SABR nu absorbs smile
+# curvature that stdev(dlnv) has no way to produce, so implied nu runs several
+# times realized nu as a matter of construction. The percentile columns are the
+# comparable part: they ask where each series sits in its OWN history.
+
+REALIZED_WINDOWS = {
+    '1W': (5, 10),
+    '2W': (10, 20),
+    '1M': (10, 20),
+    '2M': (20, 40),
+    '3M': (30, 60),
+}
 
 
-cmp = compare_implied_realized(pair, tenors)
+def _realized_rho_nu(spot_ret: pd.Series, atm: pd.Series, N: int) -> pd.DataFrame:
+    """
+    Realized (rho, nu) on an N-business-day rolling window.
 
-print(cmp['rho'])
+        rho = corr(spot log-return, log-change in ATM vol)
+        nu  = stdev(log-change in ATM vol) * sqrt(252)
 
-print(cmp['nu'])
+    Uses the tenor's OWN ATM series, so 1M realized vol-of-vol describes the 1M
+    ATM's dynamics and not some other point on the term structure.
+    """
+    dlnv = np.log(atm / atm.shift(1))
+    j    = pd.concat({'r': spot_ret, 'dlnv': dlnv}, axis=1).dropna()
+    return pd.DataFrame({
+        'rho': j['r'].rolling(N).corr(j['dlnv']),
+        'nu':  j['dlnv'].rolling(N).std() * np.sqrt(252.0),
+    }).dropna()
+
+
+def smile_vs_realized_panel(pair: str,
+                            tenors: Optional[Sequence] = None,
+                            windows: Optional[dict] = None,
+                            pct_windows: Sequence[str] = ('1Y', '5Y'),
+                            delta_pts=(35, 25, 10), beta: float = 0.5,
+                            dataset: Optional[FXVolDataset] = None,
+                            history_days: Optional[int] = None,
+                            verbose: bool = False) -> dict:
+    """
+    Build the implied-vs-realized panel: per tenor, the SABR-implied (rho, nu)
+    plus realized (rho, nu) on two lookback windows, each with its current level
+    and its percentile within 1Y and 5Y of its own history.
+
+    Parameters
+    ----------
+    pair         : FX pair, e.g. 'AUDCAD'.
+    tenors       : tenors to include. Default = the keys of `windows`.
+    windows      : {tenor: (short_bd, long_bd)} realized lookbacks in BUSINESS
+                   days. Default REALIZED_WINDOWS. Any number of windows per
+                   tenor is accepted, not just two.
+    pct_windows  : lookback horizons for the percentile columns ('1Y', '5Y').
+    delta_pts    : delta pillars for the smile fit.
+    beta         : fixed SABR backbone.
+    dataset      : optional prebuilt FXVolDataset to reuse.
+    history_days : override the auto-sized data pull.
+
+    Returns
+    -------
+    dict with:
+      'panel'  : DataFrame indexed by (tenor, source) where source is 'impl' or
+                 'real_<N>d'. Columns MultiIndex (param, stat) with param in
+                 {rho, nu}, stat in {current, pct_1Y, pct_5Y}, plus a meta block
+                 carrying window_bd / n_obs / last_date.
+      'series' : {(tenor, source): DataFrame of the daily rho/nu series} — the
+                 raw material behind the percentiles, for plotting or scoring.
+
+    Percentiles are each computed on that series' own available history, so a
+    60-day realized window starts later than the implied series and therefore
+    has a slightly shorter sample. Over 5 years the effect is immaterial, but it
+    is why n_obs differs by row rather than being one number for the panel.
+    """
+    windows = dict(REALIZED_WINDOWS if windows is None else windows)
+    if tenors is None:
+        tenors = list(windows.keys())
+    elif isinstance(tenors, (str, int)):
+        tenors = [tenors]
+
+    missing = [t for t in tenors if t not in windows]
+    if missing:
+        raise KeyError(f"No realized windows defined for {missing}. "
+                       f"Add them to `windows` (or REALIZED_WINDOWS).")
+
+    # Size the pull: widest percentile horizon + the longest realized window
+    # (business days -> calendar) + buffer for holidays and the diff/roll.
+    if dataset is None:
+        need = max(_window_calendar_days(w) for w in pct_windows)
+        longest_bd = max(max(windows[t]) for t in tenors)
+        need += int(longest_bd * 7 / 5) + 90
+        if history_days is not None:
+            need = history_days
+        dataset = FXVolDataset.build(pairs=[pair], days=need)
+
+    if verbose:
+        print("=" * 100)
+        print(f"  Smile vs realized — {pair}  |  beta={beta}  deltas={tuple(delta_pts)}")
+        print(f"  windows (bd): " +
+              "  ".join(f"{t}:{tuple(windows[t])}" for t in tenors))
+        print("=" * 100)
+
+    imp = calibrate_sabr_history(pair, tenors, dataset, delta_pts, beta,
+                                 verbose=verbose)
+    if imp.empty:
+        return {'panel': pd.DataFrame(), 'series': {}}
+    imp_tenors = set(imp.columns.get_level_values('tenor'))
+
+    spot    = dataset.spot[pair].dropna()
+    spot_r  = np.log(spot / spot.shift(1))
+
+    # ── collect every (tenor, source) daily series ────────────────────────────
+    series: dict = {}
+    for tenor in tenors:
+        if tenor not in imp_tenors:
+            warnings.warn(f"No implied history for {pair} {tenor}; tenor omitted.")
+            continue
+        series[(tenor, 'impl')] = imp[tenor][['rho', 'nu']].dropna()
+
+        col = (pair, tenor, 'ATM')
+        if col not in dataset.vol_surface.columns:
+            warnings.warn(f"No ATM series for {pair} {tenor}; realized omitted.")
+            continue
+        atm = (dataset.vol_surface[col] / 100.0).dropna()
+        for N in windows[tenor]:
+            rea = _realized_rho_nu(spot_r, atm, int(N))
+            if rea.empty:
+                warnings.warn(f"No realized data for {pair} {tenor} {N}bd.")
+                continue
+            series[(tenor, f'real_{int(N)}d')] = rea
+
+    if not series:
+        return {'panel': pd.DataFrame(), 'series': {}}
+
+    # Common as-of date, so every percentile lookback covers the same span.
+    last = max(df.index.max() for df in series.values())
+
+    rows = {}
+    for (tenor, source), df in series.items():
+        rec = {}
+        for param in ('rho', 'nu'):
+            for stat, val in _level_and_pcts(df[param], pct_windows, last).items():
+                rec[(param, stat)] = val
+        rec[('meta', 'window_bd')] = (np.nan if source == 'impl'
+                                      else int(source[5:-1]))
+        rec[('meta', 'n_obs')]     = int(len(df))
+        rec[('meta', 'last_date')] = df.index.max().date()
+        rows[(tenor, source)] = rec
+
+    panel = pd.DataFrame.from_dict(rows, orient='index')
+    panel.columns = pd.MultiIndex.from_tuples(panel.columns, names=['param', 'stat'])
+    panel.index   = pd.MultiIndex.from_tuples(panel.index, names=['tenor', 'source'])
+
+    # keep the caller's tenor order, implied first then windows ascending
+    order = [(t, s) for t in tenors
+             for s in ['impl'] + [f'real_{int(N)}d' for N in windows[t]]
+             if (t, s) in rows]
+    panel = panel.loc[order]
+    panel.attrs['pair']    = pair
+    panel.attrs['windows'] = {t: tuple(windows[t]) for t in tenors}
+
+    if verbose:
+        print(f"\n  as of {last.date()}  |  {len(panel)} rows")
+
+    return {'panel': panel, 'series': series}
+
+
+# Guarded so this module can be imported by validation / research scripts
+# without firing a Bloomberg pull on import.
+if __name__ == '__main__':
+    pair = 'EURUSD'
+    tenors = ['1W', '2W', '1M', '2M']
+
+    cmp = compare_implied_realized(pair, tenors)
+
+    print(f"\n=== {pair} rho (spot-vol corr): implied vs realized ===")
+    print(cmp['rho'])
+    print(f"\n=== {pair} nu (vol-of-vol): implied vs realized ===")
+    print(cmp['nu'])
 
 
 
+#  ---------------------------------------------------------------------------------------------------------------------------
 
-# print(f"\n=== {pair} rho (spot-vol corr): implied vs realized ===")
-# print(cmp['rho'])
-# print(f"\n=== {pair} nu (vol-of-vol): implied vs realized ===")
-# print(cmp['nu'])
 
