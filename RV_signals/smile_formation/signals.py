@@ -71,6 +71,22 @@ PCT_WINDOWS = {'1Y': 252, '5Y': 1260}
 MIN_PCT_OBS   = 126   # before a percentile is emitted at all
 MIN_SCORE_OBS = 252   # gaps needed before the gap's own rank is meaningful
 
+# Risks whose implied and realized estimates share units, so their LEVELS can be
+# compared directly. SABR rho and corr(dlnS, dlnATM) are both correlations in
+# [-1, +1]. Implied and realized NU are not comparable in level -- implied nu
+# absorbs smile curvature that stdev(dlnv) cannot produce -- which is the whole
+# reason the score is a rank-of-rank.
+LEVEL_COMPARABLE_RISKS = ('vanna',)
+
+# Where levels ARE comparable, |impl - real| measured against the sampling error
+# of the realized correlation is extra evidence the percentile gap discards.
+# It scales CONFIDENCE rather than vetoing: the percentile signal claims each
+# series is unusual within its own history, which is a different (and still
+# valid) claim from "the levels differ". So an insignificant level gap should
+# shrink the position, not zero it.
+LEVEL_SUPPORT_Z     = 1.5    # |gap| at this many SE earns full weight
+LEVEL_SUPPORT_FLOOR = 0.40   # never de-rate below this
+
 
 @dataclass(frozen=True)
 class SignalSpec:
@@ -104,7 +120,7 @@ def validate_signal_frame(df: pd.DataFrame, spec: SignalSpec) -> pd.DataFrame:
             raise ValueError(
                 f"{spec.name}: `{col}` out of [{lo}, {hi}] "
                 f"(got [{s.min():.3f}, {s.max():.3f}]). Producers must normalise "
-                f"before emitting — otherwise the loudest signal wins the average.")
+                f"before emitting -- otherwise the loudest signal wins the average.")
 
     return df[SIGNAL_COLS].sort_values(['pair', 'tenor', 'risk', 'date'])
 
@@ -152,11 +168,16 @@ class VolgaVannaCarry:
       level      = percentile of realized on the LONG window
       momentum   = pct(short) - pct(long)      -> context, feeds a gate, NOT the score
       gap_h      = pct(implied) - pct(realized_long)     for h in 1Y, 5Y
-      gap        = mean(gap_1Y, gap_5Y), HALVED when the two horizons disagree
-                   in sign (the 'already mean-reverted' trap)
+      concord    = |gap|_min / |gap|_max if signs agree else 0
+      gap        = mean(gap_1Y, gap_5Y) x (0.5 + 0.5*concord)
+                   -- full weight only when the horizons agree in sign AND in
+                   magnitude. Sign agreement alone passes (-4, -44) unhaircut,
+                   where one horizon carries everything (the 'already
+                   mean-reverted' trap in its subtler form).
       score      = -(2*expanding_rank(gap) - 1)          in [-1, +1]
       confidence = window_agreement x horizon_agreement
                    x tenor_reliability x sample_adequacy
+                   x level_support     (vanna only -- see LEVEL_COMPARABLE_RISKS)
 
     Note on rank-normalising the gap: score 0 means "as rich as usual for this
     pair", NOT "fairly priced". That is deliberate — it is what makes the score
@@ -233,10 +254,18 @@ class VolgaVannaCarry:
         gaps = {h: pct[('impl', h)] - pct[('real_l', h)] for h in self.pct_windows}
         gap_df = pd.DataFrame(gaps)
 
-        # blend horizons, but halve when they disagree in sign
-        agree = np.sign(gap_df).nunique(axis=1).le(1) | gap_df.isna().any(axis=1)
-        gap   = gap_df.mean(axis=1) * np.where(agree, 1.0, 0.5)
-        gap   = pd.Series(gap, index=f.index)
+        # Blend horizons. A sign-only agreement test is too weak: gaps of
+        # (-4, -44) agree in sign, yet one horizon carries the entire signal and
+        # the mean of -24 overstates the other. So grade CONCORDANCE
+        # continuously on the magnitude ratio, and keep the 0.5 floor so a
+        # one-horizon signal is weakened rather than discarded.
+        agree     = np.sign(gap_df).nunique(axis=1).le(1) | gap_df.isna().any(axis=1)
+        mag_ratio = (gap_df.abs().min(axis=1) /
+                     gap_df.abs().max(axis=1).replace(0.0, np.nan))
+        concord   = pd.Series(np.where(agree, mag_ratio.fillna(1.0).clip(0.0, 1.0),
+                                       0.0), index=f.index)
+        gap = gap_df.mean(axis=1) * (0.5 + 0.5 * concord)
+        gap = pd.Series(gap, index=f.index)
 
         # score: rank the gap within its OWN history, centre, flip sign so that
         # score = target position in the Greek
@@ -247,11 +276,26 @@ class VolgaVannaCarry:
         # short vs long window agreement on the 1Y horizon
         h0        = '1Y' if '1Y' in self.pct_windows else list(self.pct_windows)[0]
         win_agree = 1.0 - (pct[('real_s', h0)] - pct[('real_l', h0)]).abs() / 100.0
-        hor_agree = pd.Series(np.where(agree, 1.0, 0.5), index=f.index)
+        hor_agree = 0.5 + 0.5 * concord
         reliab    = _tenor_reliability(n_long)
         adequacy  = (gap.expanding().count() / float(self.min_score_obs)).clip(0, 1)
 
-        conf = (win_agree.clip(0, 1) * hor_agree * reliab * adequacy).clip(0.05, 1.0)
+        # Level support: only where implied and realized share units (vanna).
+        # se of a sample correlation ~ (1 - r^2)/sqrt(N-1); a level gap inside
+        # that is a coin flip, and the rank transform will happily turn it into
+        # a large percentile gap. De-rate rather than veto.
+        if risk in LEVEL_COMPARABLE_RISKS:
+            se      = ((1.0 - f[f'{p}_real_l'] ** 2)
+                       / np.sqrt(max(2.0, float(n_long) - 1.0)))
+            lvl_z   = (f[f'{p}_impl'] - f[f'{p}_real_l']).abs() / se.replace(0.0, np.nan)
+            lvl_sup = (lvl_z / LEVEL_SUPPORT_Z).clip(LEVEL_SUPPORT_FLOOR, 1.0)
+            lvl_sup = lvl_sup.fillna(1.0)
+        else:
+            lvl_z   = pd.Series(np.nan, index=f.index)
+            lvl_sup = pd.Series(1.0, index=f.index)
+
+        conf = (win_agree.clip(0, 1) * hor_agree * reliab
+                * adequacy * lvl_sup).clip(0.05, 1.0)
         conf = conf.where(score.notna())
 
         out['raw']        = gap
@@ -263,14 +307,32 @@ class VolgaVannaCarry:
             out[f'gap_{h}']       = gap_df[h]
             out[f'pct_impl_{h}']  = pct[('impl', h)]
             out[f'pct_real_{h}']  = pct[('real_l', h)]
+        h_last                    = list(self.pct_windows)[-1]
         out['pct_real_short']     = pct[('real_s', h0)]
         out['realized_momentum']  = pct[('real_s', h0)] - pct[('real_l', h0)]
-        out['real_level_pct']     = pct[('real_l', list(self.pct_windows)[-1])]
+        out['real_level_pct']     = pct[('real_l', h_last)]
+        # Short-window level, on the SAME horizon as real_level_pct. The floor
+        # gate reads the long window, which misses a short window sitting at an
+        # all-time low — the sharpest form of the run-over risk it exists for.
+        out['real_level_pct_short'] = pct[('real_s', h_last)]
         out['impl_level']         = f[f'{p}_impl']
         out['real_level']         = f[f'{p}_real_l']
         out['horizons_agree']     = agree
+        out['horizon_concord']    = concord
         out['window_agreement']   = win_agree.clip(0, 1)
         out['tenor_reliability']  = reliab
+        out['level_gap']          = (f[f'{p}_impl'] - f[f'{p}_real_l']
+                                     if risk in LEVEL_COMPARABLE_RISKS else np.nan)
+        out['level_gap_z']        = lvl_z
+        out['level_support']      = lvl_sup
+        # Realized-window lengths, so a gate can size the sampling error of the
+        # realized estimate without re-deriving it from a windows dict.
+        out['n_short']            = f.attrs['n_short']
+        out['n_long']             = n_long
+        # rmse_vp / atm live on `f` and were previously dropped here, which left
+        # gate_fit_quality reading NaN and passing unconditionally.
+        out['rmse_vp']            = f['rmse_vp']
+        out['atm']                = f['atm']
         return out
 
     # ── public entry point ───────────────────────────────────────────────────
@@ -334,7 +396,7 @@ class VolgaVannaCarry:
                    .reset_index(drop=True))
 
         if verbose:
-            print(f"\n  {self.spec.name} — {pair}: {len(signals)} signal rows, "
+            print(f"\n  {self.spec.name} -- {pair}: {len(signals)} signal rows, "
                   f"{signals['date'].min().date()} -> {signals['date'].max().date()}")
             for risk in self.spec.risks:
                 sub = signals[signals['risk'] == risk]
@@ -468,6 +530,115 @@ def orthogonality_report(signals: pd.DataFrame,
 
 
 # ══════════════════════════════════════════════════════════════════════════════
+# Vanna quality — is rho trustworthy on this pair at all?
+# ══════════════════════════════════════════════════════════════════════════════
+
+def vanna_quality_report(signals: pd.DataFrame,
+                         context: pd.DataFrame,
+                         entry_band: float = 0.40,
+                         verbose: bool = True) -> pd.DataFrame:
+    """
+    Per-tenor screen on whether the vanna leg carries signal for this pair.
+
+    The score itself needs no per-pair sign handling: score is a monotone
+    transform of rho, so a pair whose risk reversal lives above zero (USDCAD,
+    ~93% of days) and one whose RR never crosses it (AUDUSD, ~0%) both work
+    unmodified. What DOES vary by pair is whether rho is measurable at all.
+
+    Columns, and what disqualifies a tenor:
+
+    frac_rho_small    |implied rho| < 0.10. A near-symmetric smile carries no
+                      slope information, so the fit determines rho weakly.
+                      RMSE stays LOW here, so gate_fit_quality is blind to it.
+                      Above ~0.25 the tenor is mostly noise.
+
+    frac_impl_pos     Read WITH n_crossings. Near 0 or 1 means rho sits on one
+                      side and pokes across briefly -- flicker, and the
+                      percentile history is homogeneous. In [0.2, 0.8] the pair
+                      genuinely lives on both sides and the percentile history
+                      mixes two structurally different skew regimes, which the
+                      expanding score rank then bakes in permanently.
+
+    frac_level_sig    fraction with |level gap| > LEVEL_SUPPORT_Z standard
+                      errors. Low means the levels are unresolvable and the
+                      percentile gap is amplifying noise.
+
+    disagree_traded   sign(level gap) != sign(percentile gap), on days the
+                      position is live. Do NOT gate on this directly: implied
+                      rho carries a skew risk premium, so the level gap is
+                      biased negative and a sign test vetoes asymmetrically.
+
+    conviction_ratio  disagree_traded / disagree_all. THE column to rank on.
+                      Below 1.0, high-conviction days are the ones where the
+                      level gap concurs. At or above 1.0, conviction is
+                      uncorrelated or anti-correlated with agreement -- the rank
+                      transform is manufacturing it.
+
+    real_share        |corr(gap, pct_real)| / (|corr(gap, pct_impl)| + same).
+                      Near 1.0 means the implied side contributes nothing and
+                      the 'relative value' signal is realized-correlation
+                      reversal in disguise -- a legitimate signal, but not the
+                      one you think you are trading, and not one that belongs at
+                      the same sizing.
+    """
+    if signals.empty or context.empty:
+        return pd.DataFrame()
+
+    key = ['date', 'pair', 'tenor', 'risk']
+    v = (signals[signals['risk'] == 'vanna'][key + ['raw', 'score']]
+         .merge(context[context['risk'] == 'vanna'], on=key, how='left'))
+    if v.empty or 'level_gap' not in v.columns:
+        return pd.DataFrame()
+
+    v['traded']   = v['score'].abs() >= entry_band
+    v['disagree'] = np.sign(v['level_gap']) != np.sign(v['raw'])
+
+    rows = {}
+    for (pair, tenor), g in v.groupby(['pair', 'tenor'], sort=True):
+        t  = g[g['traded']]
+        sg = np.sign(g['impl_level'].dropna())
+        ci = abs(g['raw'].corr(g[[c for c in g if c.startswith('pct_impl_')][0]]))
+        cr = abs(g['raw'].corr(g[[c for c in g if c.startswith('pct_real_')][0]]))
+        d_all = g['disagree'].mean()
+        rows[(pair, tenor)] = {
+            'frac_rho_small':   float((g['impl_level'].abs() < 0.10).mean()),
+            'frac_impl_pos':    float((g['impl_level'] > 0).mean()),
+            'n_crossings':      int((sg.diff() != 0).sum() - 1) if len(sg) else 0,
+            'frac_level_sig':   float((g['level_gap_z'] >= LEVEL_SUPPORT_Z).mean()),
+            'med_level_z':      float(g['level_gap_z'].median()),
+            'disagree_traded':  float(t['disagree'].mean()) if len(t) else np.nan,
+            'conviction_ratio': float(t['disagree'].mean() / d_all)
+                                if len(t) and d_all > 0 else np.nan,
+            'real_share':       float(cr / (ci + cr)) if (ci + cr) > 0 else np.nan,
+        }
+
+    out = pd.DataFrame.from_dict(rows, orient='index')
+    out.index = pd.MultiIndex.from_tuples(out.index, names=['pair', 'tenor'])
+
+    if verbose:
+        print('\n=== vanna quality (is rho measurable on this pair?) ===')
+        print(out.round(3).to_string())
+        bad = out[(out['frac_rho_small'] > 0.25) |
+                  (out['conviction_ratio'] >= 1.0)]
+        for (pair, tenor), r in bad.iterrows():
+            why = []
+            if r['frac_rho_small'] > 0.25:
+                why.append(f"rho inside +/-0.10 on {r['frac_rho_small']:.0%} of days")
+            if r['conviction_ratio'] >= 1.0:
+                why.append(f"conviction ratio {r['conviction_ratio']:.2f} >= 1.0")
+            print(f'  DROP {pair} {tenor}: ' + '; '.join(why))
+        mixed = out[out['frac_impl_pos'].between(0.20, 0.80)]
+        for (pair, tenor), r in mixed.iterrows():
+            print(f'  REGIME {pair} {tenor}: rho positive {r["frac_impl_pos"]:.0%} of '
+                  f'days with {r["n_crossings"]} crossings - the percentile '
+                  f'history spans two skew regimes')
+        if bad.empty and mixed.empty:
+            print('  all tenors pass: rho is well identified and single-regime')
+
+    return out
+
+
+# ══════════════════════════════════════════════════════════════════════════════
 # Layer 3 — gates
 # ══════════════════════════════════════════════════════════════════════════════
 
@@ -478,32 +649,144 @@ class GateResult:
 
 
 # A gate sees the score and the context row. It returns pass/fail + a reason.
-# Gates are direction-aware: most of these only bite when you are SHORT the risk.
+# Gates are direction-aware, and some are RISK-aware. That distinction matters:
+#
+#   nu  (volga) is NON-NEGATIVE by construction. Only its lower tail is the
+#       "can only revert upward" danger, so a floor-only veto is correct.
+#   rho (vanna) is SIGNED and bounded [-1, +1]. BOTH tails are dangerous, and a
+#       floor-only veto leaves every long position unguarded.
+#
+# The original gates were written for volga and applied unchanged to vanna. The
+# `signed_risks` parameter is what repairs that: the extra veto arms only for
+# risks whose underlying quantity can sit at a dangerous upper extreme too.
 Gate = Callable[[float, pd.Series], GateResult]
 
+SIGNED_RISKS = ('vanna',)
 
-def gate_realized_momentum(threshold: float = 20.0) -> Gate:
+
+def gate_realized_momentum(threshold: float = 20.0,
+                           signed_risks: Sequence[str] = SIGNED_RISKS) -> Gate:
     """
     Block a SHORT when realized is accelerating: short-window percentile well
     above long-window. Never sell the thing that is picking up, however rich.
+
+    For a SIGNED risk, mirror it: block a LONG when realized is decelerating
+    that hard. Long vanna needs realized correlation to hold up; buying it while
+    it collapses is the same mistake in the opposite direction.
     """
     def g(score: float, ctx: pd.Series) -> GateResult:
         m = ctx.get('realized_momentum', np.nan)
-        if score < 0 and pd.notna(m) and m > threshold:
+        if pd.isna(m):
+            return GateResult(True)
+        if score < 0 and m > threshold:
             return GateResult(False, f'realized accelerating (+{m:.0f}pct)')
+        if score > 0 and m < -threshold and ctx.get('risk') in signed_risks:
+            return GateResult(False, f'realized decelerating ({m:.0f}pct)')
         return GateResult(True)
     return g
 
 
-def gate_absolute_floor(pct_floor: float = 5.0) -> Gate:
+def gate_absolute_floor(pct_floor: float = 5.0,
+                        pct_ceiling: float = 95.0,
+                        check_short_window: bool = True,
+                        signed_risks: Sequence[str] = SIGNED_RISKS) -> Gate:
     """
     Block a SHORT when the realized level is at a multi-year absolute low.
     Rich-and-calm is not rich-and-stable; this is the run-over trade.
+
+    Two repairs on the original:
+
+    `check_short_window` — the floor is now tested on the SHORT realized window
+        as well as the long one. Reading the long window alone lets through the
+        sharpest version of exactly this risk: AUDCAD 1M volga sits at 5Y pct 24
+        on its 20d window while its 10d window is at pct 1.6, so the veto misses
+        a short position taken into record-low realized vol-of-vol.
+
+    `pct_ceiling` — for a SIGNED risk, block a LONG at the opposite extreme. Long
+        vanna with realized correlation at a 5Y high needs it to stay pinned
+        near its historical maximum, which is the mirror of the floor trade.
     """
     def g(score: float, ctx: pd.Series) -> GateResult:
-        lvl = ctx.get('real_level_pct', np.nan)
-        if score < 0 and pd.notna(lvl) and lvl < pct_floor:
-            return GateResult(False, f'realized at pct {lvl:.0f} floor')
+        lvls = {'long window': ctx.get('real_level_pct', np.nan)}
+        if check_short_window:
+            lvls['short window'] = ctx.get('real_level_pct_short', np.nan)
+        signed = ctx.get('risk') in signed_risks
+
+        for which, lvl in lvls.items():
+            if pd.isna(lvl):
+                continue
+            if score < 0 and lvl < pct_floor:
+                return GateResult(False, f'realized {which} at pct {lvl:.0f} floor')
+            if score > 0 and signed and lvl > pct_ceiling:
+                return GateResult(False, f'realized {which} at pct {lvl:.0f} ceiling')
+        return GateResult(True)
+    return g
+
+
+def gate_param_identifiable(min_abs_rho: float = 0.08) -> Gate:
+    """
+    Block VANNA when implied rho sits near zero.
+
+    A near-symmetric smile carries almost no slope information, so the
+    least-squares fit determines rho only weakly — it trades off against alpha
+    and nu. Critically, `gate_fit_quality` cannot catch this: a flat smile fits
+    beautifully, so RMSE stays low while rho is noise. RMSE measures fit
+    quality; this measures identifiability, and the two come apart precisely
+    here.
+
+    Two-sided — a poorly determined parameter supports no view either way.
+
+    Only meaningful for vanna. nu is a magnitude and is identified by the
+    butterfly regardless of the skew's sign.
+    """
+    def g(score: float, ctx: pd.Series) -> GateResult:
+        if ctx.get('risk') != 'vanna':
+            return GateResult(True)
+        r = ctx.get('impl_level', np.nan)
+        if pd.notna(r) and abs(r) < min_abs_rho:
+            return GateResult(False, f'rho {r:+.3f} near zero, weakly identified')
+        return GateResult(True)
+    return g
+
+
+def gate_level_significant(k_se: float = 1.5) -> Gate:
+    """
+    Block VANNA when |implied rho - realized rho| falls inside the sampling
+    error of the realized correlation estimate.
+
+    Why this is available for vanna but NOT for volga: SABR rho and realized
+    corr(dlnS, dlnATM) are both correlations bounded [-1, +1] — the same object,
+    so their difference has meaning. Implied and realized NU are not comparable
+    in level (implied nu absorbs smile curvature that stdev(dlnv) cannot
+    produce), which is the whole reason the score is a rank-of-rank.
+
+    So for vanna there is a levels check available that the percentile gap
+    throws away, and it matters because the rank transform will happily
+    manufacture a large gap out of a level difference that is inside the noise:
+
+        AUDCAD 3M   impl -0.208, real_60d -0.354  ->  level gap +0.146
+                    se = (1 - 0.354^2)/sqrt(59)   =   0.114   ->  1.3 SE
+                    percentile gap -24, score +0.55, position LONG
+
+    Tests MAGNITUDE, not sign. A raw sign-agreement test would inherit the skew
+    risk premium's bias — implied rho runs structurally more negative than
+    realized because downside protection is persistently bid, so the level gap
+    is biased negative and a sign test vetoes asymmetrically, blocking longs and
+    waving shorts through. Comparing against the standard error is neutral.
+    """
+    def g(score: float, ctx: pd.Series) -> GateResult:
+        if ctx.get('risk') != 'vanna':
+            return GateResult(True)
+        impl, real, n = (ctx.get('impl_level', np.nan),
+                         ctx.get('real_level', np.nan),
+                         ctx.get('n_long', np.nan))
+        if any(pd.isna(x) for x in (impl, real, n)):
+            return GateResult(True)
+        se = (1.0 - float(real) ** 2) / np.sqrt(max(2.0, float(n) - 1.0))
+        lg = float(impl) - float(real)
+        if abs(lg) < k_se * se:
+            return GateResult(False,
+                              f'level gap {lg:+.3f} inside {k_se:g}x SE ({se:.3f})')
         return GateResult(True)
     return g
 
@@ -551,11 +834,27 @@ def gate_event_window(event_dates: Sequence, lookahead_bd: int = 3) -> Gate:
 
 
 DEFAULT_GATES: Dict[str, Gate] = {
-    'momentum':     gate_realized_momentum(),
-    'floor':        gate_absolute_floor(),
-    'fit':          gate_fit_quality(),
+    'momentum':     gate_realized_momentum(),   # two-sided on signed risks
+    'level':        gate_absolute_floor(),      # floor + ceiling, both windows
+    'fit':          gate_fit_quality(),         # live now that rmse_vp reaches ctx
     'window_agree': gate_window_disagreement(),
+    'rho_ident':    gate_param_identifiable(),  # vanna only
 }
+
+# `gate_level_significant` is deliberately NOT a default. Level support is
+# already priced into `confidence` via LEVEL_SUPPORT_Z, which de-rates size
+# instead of forcing flat. As a hard veto it gated ~58% of AUDCAD vanna days on
+# its own — it was overriding the signal's thesis rather than qualifying it.
+# Opt in only if you want the strict levels-must-resolve version:
+#
+#   gates = {**DEFAULT_GATES, 'level_sig': gate_level_significant(k_se=1.5)}
+
+# `gate_event_window` is deliberately absent: it needs a calendar of scheduled
+# events (RBA/BoC/CPI) that nothing here can infer. Until you supply one, the
+# book sells vol into central bank meetings. Wire it up as:
+#
+#   gates = {**DEFAULT_GATES, 'event': gate_event_window(my_dates)}
+#   decide(sig, ctx, config=cfg, gates=gates)
 
 
 # ══════════════════════════════════════════════════════════════════════════════

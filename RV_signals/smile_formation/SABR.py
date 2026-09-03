@@ -244,7 +244,7 @@ def calibrate_sabr(pair: str,
 
     if verbose:
         print("=" * 100)
-        print(f"  SABR Surface Calibration — {pair}  |  {len(tenors)} tenor(s)  "
+        print(f"  SABR Surface Calibration -- {pair}  |  {len(tenors)} tenor(s)  "
               f"|  beta={beta} fixed  |  deltas={tuple(delta_pts)}")
         print("=" * 100)
 
@@ -336,7 +336,7 @@ def calibrate_sabr_history(pair: str, tenors, dataset: FXVolDataset,
     hist = hist.sort_index()
     if verbose:
         print(f"  Calibrated history for {pair}: "
-              f"{hist.index.min().date()} → {hist.index.max().date()}  "
+              f"{hist.index.min().date()} -> {hist.index.max().date()}  "
               f"({len(hist)} dates)")
         for tenor in tenors:
             if tenor in frames:
@@ -483,7 +483,7 @@ def realized_rho_nu_history(pair: str, tenors, dataset: FXVolDataset,
 
     if verbose:
         print(f"  Realized rho/nu for {pair}: "
-              f"{hist.index.min().date()} → {hist.index.max().date()}  ({len(hist)} dates)")
+              f"{hist.index.min().date()} -> {hist.index.max().date()}  ({len(hist)} dates)")
         for tenor in tenors:
             if tenor in frames:
                 print(f"    {tenor:>4}: window={_tenor_business_days(pair, tenor)}bd, "
@@ -711,7 +711,7 @@ def smile_vs_realized_panel(pair: str,
 
     if verbose:
         print("=" * 100)
-        print(f"  Smile vs realized — {pair}  |  beta={beta}  deltas={tuple(delta_pts)}")
+        print(f"  Smile vs realized -- {pair}  |  beta={beta}  deltas={tuple(delta_pts)}")
         print(f"  windows (bd): " +
               "  ".join(f"{t}:{tuple(windows[t])}" for t in tenors))
         print("=" * 100)

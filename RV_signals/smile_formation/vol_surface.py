@@ -63,7 +63,7 @@ def build_vol_grid(atm: float,
 
 
 # ---------------------------------------------------------------------------
-# SABR vol lookup — arbitrage-free, strike-space (replaces spline in the loop)
+# SABR vol lookup -- arbitrage-free, strike-space (replaces spline in the loop)
 # ---------------------------------------------------------------------------
 
 def _fit_sabr_to_grid(vol_grid: pd.Series, F: float, T: float, r_f: float):
@@ -79,7 +79,7 @@ def _fit_sabr_to_grid(vol_grid: pd.Series, F: float, T: float, r_f: float):
     3. Calibrate alpha / nu / rho with beta = 0.5 fixed.
 
     Returns (sabr, ks, vs, atm_vol). sabr is None on calibration failure or
-    if fewer than 3 pillars are available — callers should fall back to
+    if fewer than 3 pillars are available -- callers should fall back to
     atm_vol (and, for nu/rho, to "no smile signal").
     """
     available = [(DELTA_GRID_MAP[k], float(vol_grid[k]))
@@ -128,7 +128,7 @@ def get_sabr_vol_at_K(vol_grid: pd.Series, K: float, F: float,
     Parameters
     ----------
     vol_grid : Series from build_vol_grid (keys 'ATM', 'C25', 'P25', ...)
-    K        : target strike (fixed at trade entry — never changes in the loop)
+    K        : target strike (fixed at trade entry -- never changes in the loop)
     F        : forward  S * exp((r_d - r_f) * T)  for this pillar's tenor
     T        : time to expiry in years for this pillar
     r_f      : foreign (base) rate, decimal
@@ -144,7 +144,7 @@ def get_sabr_vol_at_K(vol_grid: pd.Series, K: float, F: float,
 
 
 # ---------------------------------------------------------------------------
-# Delta interpolation — natural cubic spline (OLD PROCESS)
+# Delta interpolation -- natural cubic spline (OLD PROCESS)
 # ---------------------------------------------------------------------------
 
 def interpolate_vol_for_delta(vol_grid: pd.Series,
@@ -168,7 +168,7 @@ def interpolate_vol_for_delta(vol_grid: pd.Series,
     vol_grid     : Series from build_vol_grid, keys are 'ATM','C25','P25', etc.
     option_delta : call-delta-equivalent of the target strike, e.g. 0.25 for a
                    25d call, 0.50 for ATM, 0.75 for a 25d put (see DELTA_GRID_MAP).
-    lam          : unused — retained for backward compatibility.
+    lam          : unused -- retained for backward compatibility.
     """
     available    = {k: DELTA_GRID_MAP[k] for k in vol_grid.index if k in DELTA_GRID_MAP}
     sorted_items = sorted(available.items(), key=lambda x: x[1])
@@ -226,7 +226,7 @@ def _calibrate_biz_weight(t1: int, t2: int, n_wkd: int, n_hol: int, n_biz: int) 
 
 
 # ---------------------------------------------------------------------------
-# Calendar-arbitrage removal — Pool-Adjacent-Violators (PAVA)
+# Calendar-arbitrage removal -- Pool-Adjacent-Violators (PAVA)
 # ---------------------------------------------------------------------------
 
 def _pava_nondecreasing(values: np.ndarray) -> np.ndarray:
@@ -237,7 +237,7 @@ def _pava_nondecreasing(values: np.ndarray) -> np.ndarray:
     Scans left to right; whenever a point is smaller than the running block
     before it, the two blocks are merged into one at their (count-)weighted
     average, and merging repeats backward until non-decreasing. Blocks that
-    never violate monotonicity are returned unchanged — only the pillars
+    never violate monotonicity are returned unchanged -- only the pillars
     actually involved in a violation move.
     """
     vals, weights = [], []
@@ -278,7 +278,7 @@ def _enforce_monotonic_variance(items: list) -> list:
 
 
 # ---------------------------------------------------------------------------
-# ATM vol interpolation — weekend-weighted variance (Wystup §1.3.4)
+# ATM vol interpolation -- weekend-weighted variance (Wystup §1.3.4)
 # ---------------------------------------------------------------------------
 
 def interpolate_atm_vol(vol_row: pd.Series,
@@ -360,7 +360,7 @@ def interpolate_atm_vol(vol_row: pd.Series,
         # cumulative variance between every pillar pair. Left in as a
         # defensive invariant check in case that step is ever bypassed.
         msg = (
-            "Negative forward variance after monotonicity correction — this "
+            "Negative forward variance after monotonicity correction -- this "
             "should not happen; check _enforce_monotonic_variance.\n"
             f"  as_of            : {as_of}\n"
             f"  pair             : {pair}\n"
@@ -390,7 +390,7 @@ def interpolate_atm_vol(vol_row: pd.Series,
 
 
 # ---------------------------------------------------------------------------
-# Smile spread interpolation — √t weighting (Wystup §1.3.8)
+# Smile spread interpolation -- √t weighting (Wystup §1.3.8)
 # ---------------------------------------------------------------------------
 
 def interpolate_spread_sqrt_t(spread_t1: float,
@@ -408,7 +408,7 @@ def interpolate_spread_sqrt_t(spread_t1: float,
 
     The spread is interpolated in √t space rather than variance space because
     jump and skew risk scale with √t while the vol level (variance) scales with t.
-    Mixing the two interpolation spaces — variance for ATM level, √t for spread —
+    Mixing the two interpolation spaces -- variance for ATM level, √t for spread --
     is the industry-standard decomposition.
 
     Parameters

@@ -97,9 +97,9 @@ from Signal_Gen.xCCY_Spread import (
 
 # Option Params
 
-pair = 'USDCAD'
+pair = 'USDJPY'
 tenor = '1M'
-days_back = int(365 * 5)
+days_back = int(365 * 2)    
 
 # call_delta = 0.25
 # put_delta = 0.25
@@ -114,8 +114,10 @@ exit_rule = HoldToExpiry() #ExitAfterNDays('1W')  # HoldToExpiry()   #ExitAfterN
 # signal_legs = build_strangle(call_delta, put_delta, notional, direction)
 
 signal_legs = [
-    LegSpec('put',    -0.25, -1, 12_000_000),  
-    LegSpec('call',   +0.25, -1, 12_000_000),   
+    LegSpec('put',    -0.25, -1, 40_000_000), 
+    # LegSpec('put',    -0.50, +1, 5_000_000), 
+    # LegSpec('call',   +0.50, +1, 5_000_000),  
+    LegSpec('call',   +0.25, -1, 40_000_000),   
 ]
 
 
@@ -123,8 +125,8 @@ signal_legs = [
 legs_factory = None
 
 
-# signal_series = get_date_signal(['30Jan26', '13Feb26', '20Mar26', '1May26', '7May26'])
-signal_series = get_always_on_signal(days_back, pair=pair, tenor=tenor)
+signal_series = get_date_signal(['1May26', '31Jul26', '24Jan26', '1Aug26', '20Mar26', '28Jan26', '27Jan26', '11Feb26', '7May26'])
+# signal_series = get_always_on_signal(days_back, pair=pair, tenor=tenor)
 
 trade_log, trade_dfs, trade_leg_sums = run_signal_backtest(
     signal_series,
