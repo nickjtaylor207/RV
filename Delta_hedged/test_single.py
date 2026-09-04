@@ -25,22 +25,22 @@ from exit_hedge_logic import (
 
 
 
-# pair        =  'USDJPY'
-# tenor       =  '1M'
+# pair        =  'AUDCAD'
+# tenor       =  '3M'
 # # call_delta  =  0.25
 # # put_delta   =  0.25
 
 # notional    =  50_000_000
 # direction   =  -1
 # verbose     =  True
-# entry_days_back=9
+# entry_days_back=10
 
 
 # legs = [
-#     LegSpec('put',    -0.10, +1, 50_000_000),
-#     LegSpec('put',    -0.25, -1, 50_000_000),
-#     LegSpec('call',   +0.25, -1, 50_000_000),   
-#     LegSpec('call',   +0.10, +1, 50_000_000),   
+#     LegSpec('put',    -0.10, -1, 40_000_000),
+#     LegSpec('put',    -0.50, +1, 10_000_000),
+#     LegSpec('call',   +0.50, +1, 10_000_000),   
+#     LegSpec('call',   +0.10, -1, 40_000_000),   
 # ]
 
 
@@ -97,9 +97,9 @@ from Signal_Gen.xCCY_Spread import (
 
 # Option Params
 
-pair = 'USDJPY'
+pair = 'EURCAD'
 tenor = '1M'
-days_back = int(365 * 2)    
+days_back = int(100)    
 
 # call_delta = 0.25
 # put_delta = 0.25
@@ -114,10 +114,10 @@ exit_rule = HoldToExpiry() #ExitAfterNDays('1W')  # HoldToExpiry()   #ExitAfterN
 # signal_legs = build_strangle(call_delta, put_delta, notional, direction)
 
 signal_legs = [
-    LegSpec('put',    -0.25, -1, 40_000_000), 
-    # LegSpec('put',    -0.50, +1, 5_000_000), 
-    # LegSpec('call',   +0.50, +1, 5_000_000),  
-    LegSpec('call',   +0.25, -1, 40_000_000),   
+    LegSpec('put',    -0.10, -1, 40_000_000),
+    LegSpec('put',    -0.50, +1, 15_000_000),
+    LegSpec('call',   +0.50, +1, 15_000_000),   
+    LegSpec('call',   +0.10, -1, 40_000_000),     
 ]
 
 
@@ -125,7 +125,7 @@ signal_legs = [
 legs_factory = None
 
 
-signal_series = get_date_signal(['1May26', '31Jul26', '24Jan26', '1Aug26', '20Mar26', '28Jan26', '27Jan26', '11Feb26', '7May26'])
+signal_series = get_date_signal(['1Sep26'])
 # signal_series = get_always_on_signal(days_back, pair=pair, tenor=tenor)
 
 trade_log, trade_dfs, trade_leg_sums = run_signal_backtest(
@@ -142,7 +142,10 @@ trade_log, trade_dfs, trade_leg_sums = run_signal_backtest(
     progress=True,          # per-step tracking: pull time, loop heartbeat, summary
 )
 
-# print_trade_log(trade_log)
+print_trade_log(trade_log)
+
+
+
 
 plot_full_report(trade_dfs=trade_dfs, trade_log=trade_log, pair=pair,
     # title=f'{pair}: Sell 1M 25D Strangle in 10 per',
